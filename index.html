@@ -88,9 +88,19 @@
     .touch-area{position:fixed; inset:auto 0 0 0; height:42vh; pointer-events:auto; background:linear-gradient(180deg, transparent, rgba(0,0,0,.05));}
     .touch-area::after{content:""; position:absolute; inset:18px 18px 22px 18px; border:1px dashed rgba(102,218,255,.12); border-radius:24px; opacity:.8;}
     .pause-indicator{position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:1.4rem; letter-spacing:.3em; opacity:.9; text-transform:uppercase; text-shadow:0 0 18px rgba(102,218,255,.45);}
-    @media (max-width: 960px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr));} }
+    #levelSelectModal .screen{width:min(1240px, 96vw); padding:22px;}
+    #levelSelectModal .level-head{display:flex; justify-content:space-between; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:18px;}
+    #levelSelectModal .level-head .title{font-size: clamp(32px, 5.2vw, 68px); text-align:center; width:100%;}
+    #levelSelectModal .level-head .sub{width:100%; text-align:center; margin-top:0;}
+    #levelSelectCards{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px;}
+    #levelSelectCards .card.endless{grid-column:1 / -1; min-height:120px;}
+    @media (max-width: 960px){
+      #levelSelectCards{grid-template-columns:repeat(2,minmax(0,1fr));}
+      #levelSelectCards .card.endless{grid-column:1 / -1;}
+    }
     @media (max-width: 600px){
-      .cards{grid-template-columns:1fr;}
+      #levelSelectCards{grid-template-columns:1fr 1fr;}
+      #levelSelectCards .card.endless{grid-column:1 / -1;}
       .hero-row{align-items:start;}
       .top-actions{justify-content:flex-start;}
       .grid2{grid-template-columns:1fr;}
@@ -116,14 +126,27 @@
             </div>
           </div>
         </div>
-        <div id="levelCards" class="cards"></div>
         <div class="footer-row">
           <div>Tip: swipe or drag to steer on mobile. Use arrow keys / A-D on desktop.</div>
           <div id="saveHint">Progress saved locally.</div>
         </div>
         <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap; padding:4px 0 10px;">
-          <button id="btnPlay" class="btn primary">Play Selected Level</button>
+          <button id="btnSelectLevel" class="btn primary">Select Level</button>
+          <button id="btnPlay" class="btn">Play Selected Level</button>
           <button id="btnEndless" class="btn">Endless Rift</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="levelSelectModal" class="center-layer hidden">
+      <div class="screen menu-wrap">
+        <div class="level-head">
+          <h1 class="title">SELECT LEVEL</h1>
+          <div class="sub">Tap a planet to select it. Locked planets unlock as you travel farther.</div>
+        </div>
+        <div id="levelSelectCards"></div>
+        <div style="display:flex; justify-content:center; margin-top:16px;">
+          <button id="btnCloseLevelSelect" class="btn primary">← Back</button>
         </div>
       </div>
     </div>
@@ -289,11 +312,12 @@
     };
     const app = document.getElementById('app');
     const menu = document.getElementById('menu');
+    const levelSelectModal = document.getElementById('levelSelectModal');
     const settingsModal = document.getElementById('settingsModal');
     const pauseOverlay = document.getElementById('pauseOverlay');
     const gameOverOverlay = document.getElementById('gameOverOverlay');
     const hud = document.getElementById('hud');
-    const levelCards = document.getElementById('levelCards');
+    const levelCards = document.getElementById('levelSelectCards');
     const toast = document.getElementById('toast');
     const pauseText = document.getElementById('pauseText');
     const hudLevel = document.getElementById('hudLevel');
@@ -307,9 +331,11 @@
     const gameOverBest = document.getElementById('gameOverBest');
     const inputs = { master:document.getElementById('masterVolume'), music:document.getElementById('musicVolume'), sfx:document.getElementById('sfxVolume'), sensitivity:document.getElementById('sensitivity'), shake:document.getElementById('screenShake'), invertSteer:document.getElementById('invertSteer'), graphics:document.getElementById('graphicsQuality') };
     const values = { master:document.getElementById('masterVal'), music:document.getElementById('musicVal'), sfx:document.getElementById('sfxVal'), sensitivity:document.getElementById('sensVal'), shake:document.getElementById('shakeVal'), invertSteer:document.getElementById('invertVal'), graphics:document.getElementById('qualityVal') };
+    const btnSelectLevel = document.getElementById('btnSelectLevel');
     const btnPlay = document.getElementById('btnPlay');
     const btnEndless = document.getElementById('btnEndless');
     const btnSettingsFromMenu = document.getElementById('btnSettingsFromMenu');
+    const btnCloseLevelSelect = document.getElementById('btnCloseLevelSelect');
     const btnResetProgress = document.getElementById('btnResetProgress');
     const btnCloseSettings = document.getElementById('btnCloseSettings');
     const btnFactoryReset = document.getElementById('btnFactoryReset');
@@ -375,13 +401,15 @@
     function createWallPair(i,z){ return { left:createWall(i,z,-1), right:createWall(i,z,1) }; }
     function createWall(i,z,side){ const wallGroup=new THREE.Group(); const h=14+Math.random()*10; const w=1.6+Math.random()*2.4; const depth=track.segmentLength+1.8; const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,depth), new THREE.MeshBasicMaterial({ color:side<0 ? 0xffb14c : 0x66daff, wireframe:true, transparent:true, opacity:0.22, blending:THREE.AdditiveBlending })); mesh.position.y=h/2-0.1; wallGroup.add(mesh); const glow=new THREE.Mesh(new THREE.BoxGeometry(w*0.9,h*0.04,depth*0.95), new THREE.MeshBasicMaterial({ color:side<0 ? 0xffc96d : 0x66daff, transparent:true, opacity:0.22, blending:THREE.AdditiveBlending })); glow.position.y=1.0; wallGroup.add(glow); wallGroup.userData={ side,h,w,depth,i,z }; return wallGroup; }
     function neonMat(color, opacity=1){ return new THREE.MeshBasicMaterial({ color, transparent:true, opacity, blending:THREE.AdditiveBlending }); }
-    function populateLevelCards(){ levelCards.innerHTML=''; LEVELS.forEach(level=>{ const card=document.createElement('div'); const unlocked=!!state.progress.unlocked[level.id]; const best=state.progress.best[level.id] || 0; card.className=`card ${unlocked ? '' : 'locked'} ${state.selectedCard===level.id ? 'active' : ''}`; card.innerHTML = `<div class="accent" style="background:linear-gradient(180deg, ${level.color}, ${level.glow});"></div>${unlocked ? '' : '<div class="lock">🔒</div>'}<div class="planet">${level.planet}</div><div class="name">${level.name}</div><div class="desc">${level.desc}</div><div class="meta"><span>${level.endless ? '∞ endless' : level.km.toFixed(1) + ' km'}</span><span>Best ${best.toFixed(2)} km</span></div>`; card.addEventListener('click', ()=>{ if(!unlocked){ toastMsg('Locked. Reach more distance to unlock.'); return; } state.selectedCard=level.id; state.levelId=level.id; syncLevelUI(); populateLevelCards(); playTone(330,0.06,'triangle',0.14); }); levelCards.appendChild(card); }); }
+    function populateLevelCards(){ levelCards.innerHTML=''; LEVELS.forEach(level=>{ const card=document.createElement('div'); const unlocked=!!state.progress.unlocked[level.id]; const best=state.progress.best[level.id] || 0; card.className=`card ${unlocked ? '' : 'locked'} ${state.selectedCard===level.id ? 'active' : ''} ${level.endless ? 'endless' : ''}`; card.innerHTML = `<div class="accent" style="background:linear-gradient(180deg, ${level.color}, ${level.glow});"></div>${unlocked ? '' : '<div class="lock">🔒</div>'}<div class="planet">${level.planet}</div><div class="name">${level.name}</div><div class="desc">${level.desc}</div><div class="meta"><span>${level.endless ? '∞ endless' : level.km.toFixed(1) + ' km'}</span><span>Best ${best.toFixed(2)} km</span></div>`; card.addEventListener('click', ()=>{ if(!unlocked){ toastMsg('Locked. Reach more distance to unlock.'); return; } state.selectedCard=level.id; state.levelId=level.id; syncLevelUI(); populateLevelCards(); playTone(330,0.06,'triangle',0.14); }); levelCards.appendChild(card); }); }
     function syncLevelUI(){ const level=LEVELS.find(l=>l.id===state.levelId) || LEVELS[0]; hudLevel.textContent=level.name; hudBest.textContent=(state.progress.best[level.id] || 0).toFixed(2); document.title = level.endless ? `Neon Rift Runner - Endless Rift (${(state.progress.best[level.id] || 0).toFixed(2)} km)` : `Neon Rift Runner - ${level.name}`; }
     function syncProgressToUI(){ const p=state.progress; if(!p.unlocked[state.selectedCard] && p.unlocked[state.progress.selected]) state.selectedCard = state.progress.selected; if(!p.unlocked[state.selectedCard]) state.selectedCard = 'mercury'; state.levelId = state.selectedCard; populateLevelCards(); syncLevelUI(); }
     function applySettingsToUI(){ const s=state.settings; inputs.master.value=s.master; inputs.music.value=s.music; inputs.sfx.value=s.sfx; inputs.sensitivity.value=s.sensitivity; inputs.shake.value=s.shake; inputs.invertSteer.value=s.invertSteer; inputs.graphics.value=s.graphics; values.master.textContent=`${s.master}%`; values.music.textContent=`${s.music}%`; values.sfx.textContent=`${s.sfx}%`; values.sensitivity.textContent=`${s.sensitivity}%`; values.shake.textContent=`${s.shake}%`; values.invertSteer.textContent=s.invertSteer === 'on' ? 'On' : 'Off'; values.graphics.textContent=s.graphics[0].toUpperCase() + s.graphics.slice(1); setMusicVolume(s.music); renderer.setPixelRatio(s.graphics === 'low' ? 1.0 : s.graphics === 'medium' ? 1.4 : Math.min(window.devicePixelRatio, 1.75)); }
-    function openSettings(){ settingsModal.classList.remove('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); }
+    function openSettings(){ settingsModal.classList.remove('hidden'); levelSelectModal.classList.add('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); }
     function closeSettings(){ settingsModal.classList.add('hidden'); saveAll(); }
-    function startGame(levelId){ unlockAudio(); state.selectedCard=levelId; state.levelId=levelId; state.progress.selected=levelId; const level=LEVELS.find(l=>l.id===levelId) || LEVELS[0]; track.theme=level; track.seed=Math.random()*9999; state.playing=true; state.paused=false; state.mode='play'; state.distance=0; state.score=0; state.speed=0; state.boost=0; state.shield=3; state.multiplier=1; state.cameraShake=0; state.targetLane=0; state.lane=0; state.laneVel=0; state.currentTrackSeed=Math.random()*9999; state.obstacles=[]; state.pickups=[]; state.rings=[]; clearHazards(); setupTheme(level); menu.classList.add('hidden'); settingsModal.classList.add('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); hud.classList.remove('hidden'); touchArea.classList.toggle('hidden', !state.showTouchArea); toastMsg(level.endless ? 'Endless Rift engaged.' : `${level.name} selected.`); syncLevelUI(); playTone(220,0.08,'triangle',0.1); }
+    function openLevelSelect(){ levelSelectModal.classList.remove('hidden'); menu.classList.add('hidden'); settingsModal.classList.add('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); populateLevelCards(); }
+    function closeLevelSelect(){ levelSelectModal.classList.add('hidden'); menu.classList.remove('hidden'); saveAll(); }
+    function startGame(levelId){ unlockAudio(); state.selectedCard=levelId; state.levelId=levelId; state.progress.selected=levelId; const level=LEVELS.find(l=>l.id===levelId) || LEVELS[0]; track.theme=level; track.seed=Math.random()*9999; state.playing=true; state.paused=false; state.mode='play'; state.distance=0; state.score=0; state.speed=0; state.boost=0; state.shield=3; state.multiplier=1; state.cameraShake=0; state.targetLane=0; state.lane=0; state.laneVel=0; state.currentTrackSeed=Math.random()*9999; state.obstacles=[]; state.pickups=[]; state.rings=[]; clearHazards(); setupTheme(level); menu.classList.add('hidden'); levelSelectModal.classList.add('hidden'); settingsModal.classList.add('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); hud.classList.remove('hidden'); touchArea.classList.toggle('hidden', !state.showTouchArea); toastMsg(level.endless ? 'Endless Rift engaged.' : `${level.name} selected.`); syncLevelUI(); playTone(220,0.08,'triangle',0.1); }
     function setupTheme(level){ const t=level; scene.fog.color = new THREE.Color(0x05040a); sky.material.uniforms.topColor.value = new THREE.Color(t.id === 'earth' ? 0x07131f : 0x090611); sky.material.uniforms.bottomColor.value = new THREE.Color(t.id === 'mars' ? 0x12070a : 0x020208); sky.material.uniforms.glow.value = new THREE.Color(t.glow); ambient.color = new THREE.Color(t.color); ambient.intensity = 0.18 + t.stars * 0.1; rimLight.color = new THREE.Color(t.glow); keyLight.color = new THREE.Color(t.color); }
     function clearHazards(){ [...track.roadSegments].forEach(seg=>{ if(seg.hazards) seg.hazards.forEach(h=>world.remove(h.mesh)); seg.hazards=[]; }); state.particles.forEach(p=>world.remove(p)); state.particles.length=0; }
     function endGame(){ state.playing=false; state.paused=false; hud.classList.add('hidden'); gameOverOverlay.classList.remove('hidden'); document.getElementById('gameOverScore').textContent = state.score.toLocaleString(); const best = state.progress.best[state.levelId] || 0; document.getElementById('gameOverBest').textContent = Math.max(best, state.distance / 1000).toFixed(2); playTone(110,0.16,'sawtooth',0.15); if(audioCtx){ const t=audioCtx.currentTime; const o=audioCtx.createOscillator(); const g=audioCtx.createGain(); o.type='triangle'; o.frequency.setValueAtTime(180,t); o.frequency.exponentialRampToValueAtTime(70,t+0.22); g.gain.setValueAtTime(0.18,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.22); o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t+0.23); } }
@@ -413,9 +441,11 @@
     holdButton(btnRight, (on)=>{ if(on) state.targetLane += 0.24; });
     holdButton(btnBoost, (on)=>{ state.touch.boost = on; if(on) toastMsg('Boost engaged'); });
     holdButton(btnBrake, (on)=>{ state.touch.brake = on; });
+    btnSelectLevel.addEventListener('click', openLevelSelect);
     btnPlay.addEventListener('click', ()=>startGame(state.selectedCard));
     btnEndless.addEventListener('click', ()=>startGame('endless'));
     btnSettingsFromMenu.addEventListener('click', openSettings);
+    btnCloseLevelSelect.addEventListener('click', closeLevelSelect);
     btnResetProgress.addEventListener('click', ()=>{ if(confirm('Reset all progress?')){ localStorage.removeItem(STORAGE_KEY); state.progress = structuredClone(defaultProgress); state.selectedCard = 'mercury'; state.levelId = 'mercury'; syncProgressToUI(); saveAll(); toastMsg('Progress cleared'); }});
     btnCloseSettings.addEventListener('click', closeSettings);
     btnFactoryReset.addEventListener('click', ()=>{ if(confirm('Reset progress AND settings?')){ localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(SETTINGS_KEY); state.progress = structuredClone(defaultProgress); state.settings = structuredClone(defaultSettings); applySettingsToUI(); syncProgressToUI(); closeSettings(); populateLevelCards(); }});
@@ -426,7 +456,7 @@
     btnRestart.addEventListener('click', ()=>startGame(state.levelId));
     btnMenu.addEventListener('click', quitToMenu);
     function togglePause(force){ if(!state.playing) return; state.paused = force !== undefined ? force : !state.paused; pauseOverlay.classList.toggle('hidden', !state.paused); pauseText.classList.toggle('hidden', !state.paused); if(state.paused) playTone(220,0.04,'triangle',0.08); }
-    function quitToMenu(){ state.playing=false; state.paused=false; state.mode='menu'; hud.classList.add('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); menu.classList.remove('hidden'); populateLevelCards(); saveAll(); if(audioCtx) setMusicVolume(state.settings.music); }
+    function quitToMenu(){ state.playing=false; state.paused=false; state.mode='menu'; hud.classList.add('hidden'); pauseOverlay.classList.add('hidden'); gameOverOverlay.classList.add('hidden'); levelSelectModal.classList.add('hidden'); menu.classList.remove('hidden'); populateLevelCards(); saveAll(); if(audioCtx) setMusicVolume(state.settings.music); }
     inputs.master.addEventListener('input', ()=>{ state.settings.master = +inputs.master.value; values.master.textContent = `${state.settings.master}%`; setMusicVolume(state.settings.music); saveDebounced(); });
     inputs.music.addEventListener('input', ()=>{ state.settings.music = +inputs.music.value; values.music.textContent = `${state.settings.music}%`; setMusicVolume(state.settings.music); saveDebounced(); });
     inputs.sfx.addEventListener('input', ()=>{ state.settings.sfx = +inputs.sfx.value; values.sfx.textContent = `${state.settings.sfx}%`; saveDebounced(); });

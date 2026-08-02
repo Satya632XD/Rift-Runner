@@ -1095,7 +1095,8 @@ class Rift{
     this.wall = new THREE.Sprite(new THREE.SpriteMaterial({ map:glowTex, color:0xff2d8c, transparent:true, opacity:0.9, depthWrite:false, fog:false }));
     this.wall.scale.set(90,90,1);
     scene.add(this.wall);
-    this.distanceBehind = 34; // how far behind ship the rift edge sits
+    // How far behind the ship the leading rift edge sits. Larger = safer start.
+    this.distanceBehind = 90;
   }
   update(dt, catchUpSpeed){
     this.distanceBehind -= catchUpSpeed*dt;
@@ -1341,6 +1342,13 @@ let camShakeT = 0;
 let topMultiplier = 1.0;
 let elapsedClock = new THREE.Clock(false);
 
+// Grace period (seconds) at the start of every run during which the
+// collapsing rift cannot close in or kill the ship. Prevents the rift's
+// initial catch-up speed from ever outrunning a ship that hasn't built up
+// speed yet — this was the cause of near-instant deaths at run start.
+let riftGraceTimer = 0;
+const RIFT_GRACE_SECONDS = 3.0;
+
 const CAM_BASE_FOV = 72;
 
 function setPlanetPalette(p){
@@ -1359,6 +1367,7 @@ function startRun(planet, endless){
   topMultiplier = 1.0;
   gameOver = false;
   paused = false;
+  riftGraceTimer = RIFT_GRACE_SECONDS;
 
   track = new Track(planet, Math.random()*1000);
   if(terrain){
@@ -1371,7 +1380,7 @@ function startRun(planet, endless){
   obstacleManager = new ObstacleManager(track, planet);
   if(!speedLines) speedLines = new SpeedLines();
   if(!rift) rift = new Rift();
-  rift.distanceBehind = 40;
+  rift.distanceBehind = 90; // safe starting gap — see Rift class comment
 
   if(!ship) ship = new Ship();
   ship.reset(planet);
@@ -1631,10 +1640,18 @@ function update(dt){
     }
   }
 
-  // rift catch-up speed scales with difficulty & is dodgeable via speed/boost
-  const riftSpeed = ship.forwardSpeed*0.86 - 2.0 + Math.min(10, distProgress*0.6);
+  // Collapsing rift: held back entirely during the opening grace window so a
+  // ship that hasn't ramped up speed yet can never be caught immediately.
+  // After grace expires, catch-up speed scales with how much *faster than
+  // base cruising speed* the ship is going (boost/multiplier), plus a small
+  // difficulty-driven creep — rather than a flat fraction of total speed,
+  // which used to close the gap in ~1 second from the start of every run.
+  if(riftGraceTimer>0) riftGraceTimer -= dt;
+  const riftSpeed = riftGraceTimer>0
+    ? 0
+    : Math.max(0, ship.forwardSpeed - ship.baseSpeed) * 0.5 + Math.min(14, distProgress*1.2);
   rift.update(dt, riftSpeed);
-  if(rift.distanceBehind <= 7.2){
+  if(riftGraceTimer<=0 && rift.distanceBehind <= 7.2){
     triggerCrash();
     return;
   }

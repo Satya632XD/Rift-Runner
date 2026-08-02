@@ -18,6 +18,21 @@
     background:#000; overflow:hidden; overscroll-behavior:none;
     font-family:'Orbitron', 'Segoe UI', sans-serif;
   }
+  #appRoot{
+    position:fixed; inset:0; width:100%; height:100%;
+    transform-origin: center center;
+  }
+  /* Forced-landscape rotation: applied via JS when a touch device is held in
+     portrait. This rotates the whole game 90° and remaps it to the physical
+     screen's actual pixel dimensions, the same technique landscape-only mobile
+     games (Free Fire, etc.) use — no orientation-lock permission required, and
+     it works even when the Fullscreen/Orientation APIs are unavailable or denied. */
+  body.force-rotate #appRoot{
+    width: 100vh;
+    height: 100vw;
+    top: 50%; left: 50%;
+    transform: translate(-50%,-50%) rotate(90deg);
+  }
   #canvasWrap, canvas, #touchControls, #boostBtn{
     touch-action:none;
   }
@@ -27,39 +42,6 @@
   }
   #canvasWrap{position:fixed; inset:0;}
   canvas{display:block; width:100%; height:100%;}
-
-  /* ---------- Rotate device overlay ---------- */
-  #rotateOverlay{
-    position:fixed; inset:0; z-index:9999;
-    background:#03010a;
-    display:none;
-    align-items:center; justify-content:center; flex-direction:column;
-    color:var(--cyan); text-align:center; gap:18px;
-    font-family:'Orbitron', sans-serif;
-  }
-  #rotateOverlay.show{display:flex;}
-  .rotate-icon{
-    width:70px; height:70px;
-    border:3px solid var(--cyan);
-    border-radius:8px;
-    position:relative;
-    animation:rotatePulse 1.8s ease-in-out infinite;
-    box-shadow:0 0 25px rgba(57,242,232,0.5);
-  }
-  .rotate-icon:after{
-    content:'';
-    position:absolute; top:-14px; right:-14px;
-    width:0; height:0;
-    border-left:8px solid transparent;
-    border-right:8px solid transparent;
-    border-bottom:14px solid var(--cyan);
-  }
-  @keyframes rotatePulse{
-    0%,100%{transform:rotate(0deg);}
-    50%{transform:rotate(90deg);}
-  }
-  #rotateOverlay p{margin:0; letter-spacing:3px; font-size:13px; opacity:0.85;}
-  #rotateOverlay h2{margin:0; letter-spacing:4px; font-size:20px; text-shadow:0 0 12px var(--cyan);}
 
   /* ---------- HUD ---------- */
   #hud{
@@ -228,20 +210,18 @@
 </head>
 <body>
 
+<div id="appRoot">
+
 <div id="loadingScreen">
   <div class="logo" style="font-size:32px;">RIFT RUNNER</div>
-  <div class="loadbar"><div class="loadbar-fill"></div></div>
-  <div style="font-size:10px; letter-spacing:3px; opacity:0.5;">CALIBRATING HOVERSHIP</div>
-</div>
-
-<div id="rotateOverlay">
-  <div class="rotate-icon"></div>
-  <h2>ROTATE DEVICE</h2>
-  <p>RIFT RUNNER REQUIRES LANDSCAPE ORIENTATION</p>
+  <div class="loadbar" id="loadbar"><div class="loadbar-fill"></div></div>
+  <div style="font-size:10px; letter-spacing:3px; opacity:0.5;" id="loadingStatus">CALIBRATING HOVERSHIP</div>
+  <button class="btn ghost" id="btnLoadRetry" style="display:none; margin-top:18px;">RETRY</button>
 </div>
 
 <div id="canvasWrap"><canvas id="c"></canvas></div>
 <canvas id="speedFx"></canvas>
+
 
 <!-- HUD -->
 <div id="hud" style="display:none;">
@@ -349,16 +329,58 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/shaders/RGBShiftShader.js"></script>
+</div><!-- /#appRoot -->
+
 <script>
+/* Boot sequencer: loads Three.js core first and only then starts the game.
+   Everything inside RiftRunnerMain() touches THREE.* at the top level (scene,
+   renderer, camera, terrain classes are all constructed eagerly), so none of
+   it can safely run until the library is confirmed present — a static
+   blocking <script src> tag *usually* enforces this via document order, but
+   is not a real guarantee (slow/blocked/async-loaded network conditions can
+   still race it), so we make the dependency explicit instead. */
 (function(){
+  const status = document.getElementById('loadingStatus');
+  const bar = document.getElementById('loadbar');
+  const retryBtn = document.getElementById('btnLoadRetry');
+
+  function showLoadErrorEarly(message){
+    if(status) status.textContent = message;
+    if(bar) bar.style.display = 'none';
+    if(retryBtn){
+      retryBtn.style.display = 'inline-block';
+      retryBtn.onclick = ()=> location.reload();
+    }
+  }
+
+  function loadThreeCore(){
+    return new Promise((resolve)=>{
+      let done = false;
+      const finish = (ok)=>{ if(done) return; done = true; resolve(ok); };
+      const el = document.createElement('script');
+      el.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+      el.onload = ()=> finish(typeof window.THREE !== 'undefined');
+      el.onerror = ()=> finish(false);
+      document.head.appendChild(el);
+      setTimeout(()=> finish(typeof window.THREE !== 'undefined'), 12000);
+    });
+  }
+
+  loadThreeCore().then(ok=>{
+    if(!ok){
+      showLoadErrorEarly('CONNECTION TOO SLOW — CHECK NETWORK AND RETRY');
+      return;
+    }
+    try{
+      RiftRunnerMain();
+    }catch(e){
+      console.error('Fatal init error:', e);
+      showLoadErrorEarly('SOMETHING WENT WRONG — TAP RETRY');
+    }
+  });
+})();
+
+function RiftRunnerMain(){
 "use strict";
 
 /* =========================================================================
@@ -409,9 +431,8 @@ if(!SAVE.settings) SAVE.settings = {sens:100, shake:100, invert:0};
 if(SAVE.unlocked==null) SAVE.unlocked = 1;
 
 /* ---------------------------------------------------------------------
-   2. ORIENTATION HANDLING (force landscape)
+   2. ORIENTATION HANDLING (auto-rotate to landscape, no prompt)
 --------------------------------------------------------------------- */
-const rotateOverlay = document.getElementById('rotateOverlay');
 function isPortrait(){ return window.innerHeight > window.innerWidth; }
 function isTouchDevice(){ return ('ontouchstart' in window) || navigator.maxTouchPoints > 0; }
 
@@ -420,18 +441,18 @@ async function tryLockLandscape(){
     if(screen.orientation && screen.orientation.lock){
       await screen.orientation.lock('landscape');
     }
-  }catch(e){ /* not supported / needs fullscreen — fine, we handle with overlay */ }
+  }catch(e){ /* not supported / needs fullscreen — fine, CSS auto-rotate covers us regardless */ }
 }
+// CSS-rotate the whole game 90° when a touch device is held in portrait — the
+// same technique landscape-only mobile games use. Requires no permission and
+// works even where the Orientation Lock API is unavailable or denied.
 function checkOrientation(){
-  if(isTouchDevice() && isPortrait()){
-    rotateOverlay.classList.add('show');
-    if(running) setPaused(true, false);
-  } else {
-    rotateOverlay.classList.remove('show');
-  }
+  const shouldRotate = isTouchDevice() && isPortrait();
+  document.body.classList.toggle('force-rotate', shouldRotate);
+  onResize();
 }
-window.addEventListener('resize', ()=>{ checkOrientation(); onResize(); });
-window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{checkOrientation(); onResize();}, 200); });
+window.addEventListener('resize', checkOrientation);
+window.addEventListener('orientationchange', ()=> setTimeout(checkOrientation, 150));
 document.addEventListener('visibilitychange', ()=>{ if(document.hidden && running) setPaused(true,false); });
 
 /* ---------------------------------------------------------------------
@@ -470,7 +491,37 @@ scene.add(shipLight);
    crash the whole page. This guard is what keeps mobile playable even when
    optional visual scripts don't come through. */
 let composer = null, bloomPass = null, rgbPass = null;
-function setupPostProcessing(){
+
+function loadScriptWithTimeout(src, timeoutMs){
+  return new Promise((resolve)=>{
+    let done = false;
+    const finish = (ok)=>{ if(done) return; done = true; resolve(ok); };
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = ()=> finish(true);
+    el.onerror = ()=> finish(false);
+    document.head.appendChild(el);
+    setTimeout(()=> finish(false), timeoutMs);
+  });
+}
+
+// Loads bloom/RGB-shift postprocessing in the background. Never blocks boot:
+// if any script fails or is slow, the game proceeds with direct rendering.
+async function setupPostProcessingAsync(){
+  const base = 'https://unpkg.com/three@0.128.0/examples/js/';
+  const files = [
+    'postprocessing/EffectComposer.js',
+    'postprocessing/RenderPass.js',
+    'postprocessing/ShaderPass.js',
+    'shaders/CopyShader.js',
+    'shaders/LuminosityHighPassShader.js',
+    'postprocessing/UnrealBloomPass.js',
+    'shaders/RGBShiftShader.js',
+  ];
+  for(const f of files){
+    const ok = await loadScriptWithTimeout(base+f, 4000);
+    if(!ok) return false; // fail fast; direct rendering already works fine
+  }
   try{
     if(typeof THREE.EffectComposer !== 'function') return false;
     composer = new THREE.EffectComposer(renderer);
@@ -485,6 +536,7 @@ function setupPostProcessing(){
       rgbPass.uniforms['amount'].value = 0.0006;
       composer.addPass(rgbPass);
     }
+    composer.setSize(window.innerWidth, window.innerHeight);
     return true;
   }catch(e){
     console.warn('Postprocessing unavailable, falling back to direct render.', e);
@@ -494,7 +546,13 @@ function setupPostProcessing(){
 }
 
 function onResize(){
-  const w = window.innerWidth, h = window.innerHeight;
+  // Under force-rotate, #appRoot's effective size is 100vh x 100vw (swapped),
+  // so the renderer/camera must use those dimensions, not the raw (portrait)
+  // window.innerWidth/innerHeight, or the canvas would render at the wrong
+  // aspect ratio and get stretched by the CSS rotation.
+  const rotated = document.body.classList.contains('force-rotate');
+  const w = rotated ? window.innerHeight : window.innerWidth;
+  const h = rotated ? window.innerWidth : window.innerHeight;
   renderer.setSize(w,h,true);
   camera.aspect = w/h;
   camera.updateProjectionMatrix();
@@ -984,6 +1042,7 @@ class SpeedLines{
     this.count = 180;
     const geo = new THREE.BufferGeometry();
     this.positions = new Float32Array(this.count*6); // line = 2 pts
+    this.speeds = new Float32Array(this.count);
     for(let i=0;i<this.count;i++) this._respawn(i, true);
     geo.setAttribute('position', new THREE.BufferAttribute(this.positions,3));
     const mat = new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.0, fog:false });
@@ -991,7 +1050,6 @@ class SpeedLines{
     this.lines = new THREE.LineSegments(geo, mat);
     this.lines.frustumCulled = false;
     scene.add(this.lines);
-    this.speeds = new Float32Array(this.count);
   }
   _respawn(i, init){
     const r = 3 + Math.random()*13;
@@ -1208,17 +1266,29 @@ function pollKeyboard(){
 const touchLeft = document.getElementById('touchLeft');
 const touchRight = document.getElementById('touchRight');
 const boostBtn = document.getElementById('boostBtn');
-let touchSteerActive = false, touchSteerX = 0, touchStartX = 0;
+let touchSteerActive = false, touchSteerX = 0, touchStartX = 0, touchStartY = 0;
 let touchClimbActive = false;
+
+// When #appRoot is CSS-rotated 90deg for forced landscape, touch events still
+// report physical (un-rotated) viewport coordinates. A visual left/right drag
+// then shows up as a physical up/down movement, so the delta axis must swap.
+function steerDelta(e){
+  const t = e.touches[0];
+  if(document.body.classList.contains('force-rotate')){
+    return t.clientY - touchStartY; // rotate(90deg): visual +X === physical +Y
+  }
+  return t.clientX - touchStartX;
+}
 
 function setupTouch(){
   touchLeft.addEventListener('touchstart', e=>{
     touchSteerActive = true;
     touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
   }, {passive:true});
   touchLeft.addEventListener('touchmove', e=>{
     if(!touchSteerActive) return;
-    const dx = e.touches[0].clientX - touchStartX;
+    const dx = steerDelta(e);
     touchSteerX = THREE.MathUtils.clamp(dx/90, -1, 1);
   }, {passive:true});
   touchLeft.addEventListener('touchend', ()=>{ touchSteerActive=false; touchSteerX=0; }, {passive:true});
@@ -1274,17 +1344,8 @@ let elapsedClock = new THREE.Clock(false);
 const CAM_BASE_FOV = 72;
 
 function setPlanetPalette(p){
-  scene.fog.color.setHex(p.fog);
-  sunMesh.material.color.setHex(p.sun);
-  sunGlow.material.color.setHex(p.sun);
-  wallLightL.color.setHex(p.wallLight);
-  wallLightR.color.setHex(p.wallLight);
-  hemi.color.setHex(p.wallLight);
+  applyAmbiencePalette(p);
   terrain.setPalette(p);
-  boltGroup.remove(boltMesh);
-  boltMesh = makeBoltMesh(p.boltColor);
-  boltMesh.position.set((Math.random()-0.5)*30, 0, -370-Math.random()*40);
-  boltGroup.add(boltMesh);
 }
 
 function startRun(planet, endless){
@@ -1812,18 +1873,34 @@ document.body.appendChild(pauseTapZone);
 /* ---------------------------------------------------------------------
    15. BOOT
 --------------------------------------------------------------------- */
+function applyAmbiencePalette(p){
+  // Subset of setPlanetPalette() that doesn't touch `terrain` — safe to call
+  // before any run has started (terrain is only constructed in startRun()).
+  scene.fog.color.setHex(p.fog);
+  sunMesh.material.color.setHex(p.sun);
+  sunGlow.material.color.setHex(p.sun);
+  wallLightL.color.setHex(p.wallLight);
+  wallLightR.color.setHex(p.wallLight);
+  hemi.color.setHex(p.wallLight);
+  boltGroup.remove(boltMesh);
+  boltMesh = makeBoltMesh(p.boltColor);
+  boltMesh.position.set((Math.random()-0.5)*30, 0, -370-Math.random()*40);
+  boltGroup.add(boltMesh);
+}
+
 function boot(){
-  setupPostProcessing();
   onResize();
   checkOrientation();
-  setPlanetPalette(PLANETS[0]);
+  applyAmbiencePalette(PLANETS[0]);
   document.getElementById('loadingScreen').style.display='none';
   showScreen('mainMenu');
   animate();
+  // Bloom/RGB-shift load in the background; game is already playable without them.
+  setupPostProcessingAsync();
 }
-setTimeout(boot, 350);
+boot();
 
-})();
+}
 </script>
 </body>
 </html>

@@ -33,7 +33,7 @@
     top: 50%; left: 50%;
     transform: translate(-50%,-50%) rotate(90deg);
   }
-  #canvasWrap, canvas, #touchControls, #boostBtn{
+  #canvasWrap, canvas, #touchControls{
     touch-action:none;
   }
   @font-face{
@@ -180,17 +180,15 @@
   .touch-zone{position:absolute; top:0; bottom:0; width:50%; pointer-events:auto;}
   #touchLeft{left:0;}
   #touchRight{right:0;}
-  .touch-hint{position:absolute; bottom:18px; font-size:9px; letter-spacing:2px; opacity:0.25; width:100%; text-align:center;}
-  #boostBtn{
-    position:fixed; right:18px; bottom:18px; z-index:46; pointer-events:auto;
-    width:78px; height:78px; border-radius:50%;
-    background:radial-gradient(circle, rgba(255,45,140,0.35), rgba(255,45,140,0.05));
-    border:2px solid rgba(255,45,140,0.7);
-    color:#fff; font-size:10px; letter-spacing:1px; font-weight:900;
-    display:flex; align-items:center; justify-content:center; text-align:center;
-    box-shadow:0 0 22px rgba(255,45,140,0.3);
+  .touch-zone::before{
+    content:attr(data-label); position:absolute; bottom:22px; left:50%; transform:translateX(-50%);
+    min-width:118px; padding:12px 16px; border:1px solid rgba(57,242,232,0.35);
+    border-radius:999px; color:#dffcff; font-size:10px; letter-spacing:2px; text-align:center;
+    background:rgba(2,8,18,0.28); box-shadow:0 0 18px rgba(57,242,232,0.12); opacity:0.55;
   }
-  #boostBtn:active{transform:scale(0.92); background:rgba(255,45,140,0.5);}
+  #touchRight::before{border-color:rgba(255,45,140,0.35); box-shadow:0 0 18px rgba(255,45,140,0.12);}
+  #touchControls.steering #touchLeft::before, #touchControls.climbing #touchRight::before{opacity:0.95; background:rgba(57,242,232,0.16);}
+  .touch-hint{position:absolute; bottom:18px; font-size:9px; letter-spacing:2px; opacity:0.25; width:100%; text-align:center;}
   #climbHint{position:fixed; left:18px; bottom:18px; z-index:46; font-size:9px; letter-spacing:1px; opacity:0.35; color:#dffcff;}
 
   .crosshair-note{font-size:10px; opacity:0.4; letter-spacing:2px; margin-top:6px;}
@@ -240,16 +238,16 @@
   <div class="hud-topright">
     <div class="best-label" id="bestLabel">BEST 0%</div>
     <div class="dist-label" id="distLabel">0.00 KM</div>
+    <div class="best-label" id="healthLabel">HULL 100%</div>
   </div>
   <div class="warn-flash" id="warnFlash"></div>
   <div class="popup-text" id="popupText"></div>
 </div>
 
 <div id="touchControls">
-  <div class="touch-zone" id="touchLeft"></div>
-  <div class="touch-zone" id="touchRight"></div>
+  <div class="touch-zone" id="touchLeft" data-label="DRAG TO STEER"></div>
+  <div class="touch-zone" id="touchRight" data-label="HOLD TO CLIMB"></div>
 </div>
-<div id="boostBtn" style="display:none;">BOOST</div>
 <div id="climbHint" style="display:none;">HOLD TO CLIMB · RELEASE TO DIVE</div>
 
 <!-- Main Menu -->
@@ -465,13 +463,13 @@ renderer.setClearColor(0x000000, 1);
 if(renderer.outputColorSpace!==undefined) renderer.outputColorSpace = THREE.SRGBColorSpace;
 else if(renderer.outputEncoding!==undefined) renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.28;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 900);
+const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 1600);
 
 // Fog (updated per-planet)
-scene.fog = new THREE.FogExp2(0x0a0210, 0.012);
+scene.fog = new THREE.FogExp2(0x0a0210, 0.0075);
 
 // Lighting
 const hemi = new THREE.HemisphereLight(0x88aaff, 0x0a0510, 0.55);
@@ -672,7 +670,7 @@ scene.add(stars);
 // (pool) meshes behind it for endless play.
 
 const SEG_LEN = 8;           // length of one segment along Z
-const SEGS_AHEAD = 90;       // how many segments kept alive ahead
+const SEGS_AHEAD = 150;      // how many segments kept alive ahead
 const TRACK_HALF_BASE = 9;   // base half-width of drivable track
 const WALL_SEG_W = 5;        // width subdivisions across wall face
 const WALL_HEIGHT = 46;
@@ -737,8 +735,8 @@ class Track{
     return Math.sin(t*2.2)*1.6*diff + fbm(t,2)*3*diff;
   }
 
-  _genUpTo(count){
-    while(this.segments.length < count){
+  _genUpTo(indexLimit){
+    while(this.headIndex < indexLimit){
       const i = this.headIndex;
       const cx = this.centerlineAt(i);
       const bank = this.bankAt(i);
@@ -1039,7 +1037,7 @@ class ObstacleManager{
 /* Speed-line particles */
 class SpeedLines{
   constructor(){
-    this.count = 180;
+    this.count = isTouchDevice() ? 150 : 240;
     const geo = new THREE.BufferGeometry();
     this.positions = new Float32Array(this.count*6); // line = 2 pts
     this.speeds = new Float32Array(this.count);
@@ -1188,6 +1186,7 @@ class Ship{
     this.maxSpeed = 96;
     this.boostTimer = 0;
     this.alive = true;
+    this.health = 100;
     this.climbing = false;
     this.grazeCooldownL = 0;
     this.grazeCooldownR = 0;
@@ -1200,6 +1199,7 @@ class Ship{
     this.forwardSpeed = this.baseSpeed;
     this.boostTimer = 0;
     this.alive = true;
+    this.health = 100;
     this.mesh.visible = true;
   }
 }
@@ -1243,7 +1243,7 @@ function drawSpeedFx(speedFactor){
 /* ---------------------------------------------------------------------
    9. INPUT
 --------------------------------------------------------------------- */
-const input = { steer:0, climb:0, boostHeld:false, keys:{} };
+const input = { steer:0, climb:0, keys:{} };
 let usingTilt = false;
 let tiltBaseline = 0;
 
@@ -1259,14 +1259,12 @@ function pollKeyboard(){
   if(input.keys['ArrowRight']||input.keys['KeyD']) steer += 1;
   if(input.keys['ArrowUp']||input.keys['KeyW']) climb += 1;
   if(input.keys['ArrowDown']||input.keys['KeyS']) climb -= 1;
-  input.boostHeld = !!(input.keys['Space']||input.keys['ShiftLeft']||input.keys['ShiftRight']);
   return { steer, climb };
 }
 
 // Touch controls
 const touchLeft = document.getElementById('touchLeft');
 const touchRight = document.getElementById('touchRight');
-const boostBtn = document.getElementById('boostBtn');
 let touchSteerActive = false, touchSteerX = 0, touchStartX = 0, touchStartY = 0;
 let touchClimbActive = false;
 
@@ -1284,6 +1282,7 @@ function steerDelta(e){
 function setupTouch(){
   touchLeft.addEventListener('touchstart', e=>{
     touchSteerActive = true;
+    document.getElementById('touchControls').classList.add('steering');
     touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
   }, {passive:true});
@@ -1292,13 +1291,12 @@ function setupTouch(){
     const dx = steerDelta(e);
     touchSteerX = THREE.MathUtils.clamp(dx/90, -1, 1);
   }, {passive:true});
-  touchLeft.addEventListener('touchend', ()=>{ touchSteerActive=false; touchSteerX=0; }, {passive:true});
+  touchLeft.addEventListener('touchend', ()=>{ touchSteerActive=false; touchSteerX=0; document.getElementById('touchControls').classList.remove('steering'); }, {passive:true});
+  touchLeft.addEventListener('touchcancel', ()=>{ touchSteerActive=false; touchSteerX=0; document.getElementById('touchControls').classList.remove('steering'); }, {passive:true});
 
-  touchRight.addEventListener('touchstart', ()=>{ touchClimbActive = true; }, {passive:true});
-  touchRight.addEventListener('touchend', ()=>{ touchClimbActive = false; }, {passive:true});
-
-  boostBtn.addEventListener('touchstart', e=>{ e.stopPropagation(); input.boostHeld = true; }, {passive:true});
-  boostBtn.addEventListener('touchend', e=>{ e.stopPropagation(); input.boostHeld = false; }, {passive:true});
+  touchRight.addEventListener('touchstart', ()=>{ touchClimbActive = true; document.getElementById('touchControls').classList.add('climbing'); }, {passive:true});
+  touchRight.addEventListener('touchend', ()=>{ touchClimbActive = false; document.getElementById('touchControls').classList.remove('climbing'); }, {passive:true});
+  touchRight.addEventListener('touchcancel', ()=>{ touchClimbActive = false; document.getElementById('touchControls').classList.remove('climbing'); }, {passive:true});
 
   // Device tilt as alternative steer
   window.addEventListener('deviceorientation', e=>{
@@ -1391,7 +1389,6 @@ function startRun(planet, endless){
   document.getElementById('hud').style.display = 'block';
   if(isTouchDevice()){
     document.getElementById('touchControls').classList.add('active');
-    boostBtn.style.display = 'flex';
     document.getElementById('climbHint').style.display='block';
   }
   running = true;
@@ -1413,7 +1410,7 @@ function endRun(){
   document.getElementById('finalScore').textContent = Math.floor(score);
   document.getElementById('finalMult').textContent = '×'+topMultiplier.toFixed(1);
   document.getElementById('newBestBanner').style.display = isNewBest ? 'block' : 'none';
-  setTimeout(()=>{ showScreen('gameOverScreen'); document.getElementById('hud').style.display='none'; document.getElementById('touchControls').classList.remove('active'); boostBtn.style.display='none'; document.getElementById('climbHint').style.display='none';}, 900);
+  setTimeout(()=>{ showScreen('gameOverScreen'); document.getElementById('hud').style.display='none'; document.getElementById('touchControls').classList.remove('active','steering','climbing'); document.getElementById('climbHint').style.display='none';}, 900);
 }
 
 function completeLevel(){
@@ -1426,8 +1423,7 @@ function completeLevel(){
   document.getElementById('lcScore').textContent = Math.floor(score);
   showScreen('levelCompleteScreen');
   document.getElementById('hud').style.display='none';
-  document.getElementById('touchControls').classList.remove('active');
-  boostBtn.style.display='none';
+  document.getElementById('touchControls').classList.remove('active','steering','climbing');
   document.getElementById('climbHint').style.display='none';
 }
 
@@ -1501,12 +1497,7 @@ function update(dt){
   if(SAVE.settings.invert) climbInput = -climbInput;
 
   // --- speed / boost
-  const boosting = input.boostHeld && ship.boostTimer<=0 && boostFx<=0;
-  if(boosting){
-    boostFx = 0.55;
-    showPopup('BOOST', currentPlanet.accentCss);
-    camShakeT = Math.max(camShakeT, 0.25);
-  }
+  // Boosts are earned automatically by threading gates; there is no manual on-screen boost.
   if(boostFx>0) boostFx -= dt;
 
   const distProgress = distanceM/1000;
@@ -1582,8 +1573,8 @@ function update(dt){
   }
 
   if(crashed){
-    triggerCrash();
-    return;
+    applyDamage(34, 'WALL IMPACT');
+    if(!ship.alive) return;
   }
 
   // multiplier decay
@@ -1610,7 +1601,8 @@ function update(dt){
         multiplier = Math.min(3.0, multiplier + 0.25);
         multiplierTimer = 2.6;
         score += 150*multiplier;
-        showPopup(gateStreak>1 ? 'CHAIN ×'+gateStreak : 'GATE', currentPlanet.accentCss);
+        boostFx = Math.max(boostFx, 0.62);
+        showPopup(gateStreak>1 ? 'BOOST ×'+gateStreak : 'GATE BOOST', currentPlanet.accentCss);
         lightDiamonds(Math.min(3, gateStreak%3===0?3:gateStreak%3));
         camShakeT = Math.max(camShakeT, 0.12);
       } else if(g.z > ship.pos.z + 0.5){
@@ -1634,8 +1626,8 @@ function update(dt){
       // high speed don't feel like unfair reads
       if(dx < 1.15 && dy < 1.55 && dz < 1.15){
         o.hit = true;
-        triggerCrash();
-        return;
+        applyDamage(45, 'HAZARD HIT');
+        if(!ship.alive) return;
       }
     }
   }
@@ -1652,8 +1644,9 @@ function update(dt){
     : Math.max(0, ship.forwardSpeed - ship.baseSpeed) * 0.5 + Math.min(14, distProgress*1.2);
   rift.update(dt, riftSpeed);
   if(riftGraceTimer<=0 && rift.distanceBehind <= 7.2){
-    triggerCrash();
-    return;
+    applyDamage(28, 'RIFT BURN');
+    rift.distanceBehind = 26;
+    if(!ship.alive) return;
   }
 
   // level completion check
@@ -1666,6 +1659,7 @@ function update(dt){
   document.getElementById('multText').textContent = '×'+multiplier.toFixed(2);
   document.getElementById('scoreNum').textContent = Math.floor(score).toLocaleString();
   document.getElementById('distLabel').textContent = (distanceM/1000).toFixed(2)+' KM';
+  document.getElementById('healthLabel').textContent = 'HULL '+Math.ceil(ship.health)+'%';
   if(!isEndless){
     const pct = Math.min(100,(distanceM/(currentPlanet.lengthKm*1000))*100);
     document.getElementById('planetFill').style.width = pct+'%';
@@ -1695,6 +1689,19 @@ function flashWarn(){
   const el = document.getElementById('warnFlash');
   el.classList.add('on');
   setTimeout(()=>el.classList.remove('on'), 130);
+}
+
+function applyDamage(amount, label){
+  ship.health = Math.max(0, ship.health - amount);
+  camShakeT = Math.max(camShakeT, 0.35);
+  flashWarn();
+  multiplier = 1.0;
+  gateStreak = 0;
+  lightDiamonds(0);
+  showPopup(ship.health <= 0 ? 'CRITICAL CRASH' : label + ' -' + amount, '#ff2d2d');
+  ship.velX *= -0.45;
+  ship.forwardSpeed *= 0.72;
+  if(ship.health <= 0) triggerCrash();
 }
 
 function triggerCrash(){
@@ -1836,7 +1843,7 @@ document.getElementById('btnResume').addEventListener('click', ()=> setPaused(fa
 document.getElementById('btnRestartPause').addEventListener('click', ()=> startRun(currentPlanet, isEndless));
 document.getElementById('btnQuitPause').addEventListener('click', ()=>{
   running=false; showScreen('mainMenu'); document.getElementById('hud').style.display='none';
-  document.getElementById('touchControls').classList.remove('active'); boostBtn.style.display='none'; document.getElementById('climbHint').style.display='none';
+  document.getElementById('touchControls').classList.remove('active','steering','climbing'); document.getElementById('climbHint').style.display='none';
 });
 
 function tappable(el, fn){

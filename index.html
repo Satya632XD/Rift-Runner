@@ -248,7 +248,7 @@
   <div class="touch-zone" id="touchLeft" data-label="DRAG TO STEER"></div>
   <div class="touch-zone" id="touchRight" data-label="HOLD TO CLIMB"></div>
 </div>
-<div id="climbHint" style="display:none;">HOLD TO CLIMB · RELEASE TO DIVE</div>
+<div id="climbHint" style="display:none;">HOLD TO CLIMB · RELEASE TO DESCEND</div>
 
 <!-- Main Menu -->
 <div class="screen" id="mainMenu">
@@ -466,10 +466,10 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.28;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 1600);
+const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 2600);
 
 // Fog (updated per-planet)
-scene.fog = new THREE.FogExp2(0x0a0210, 0.0075);
+scene.fog = new THREE.FogExp2(0x0a0210, 0.0048);
 
 // Lighting
 const hemi = new THREE.HemisphereLight(0x88aaff, 0x0a0510, 0.55);
@@ -670,7 +670,7 @@ scene.add(stars);
 // (pool) meshes behind it for endless play.
 
 const SEG_LEN = 8;           // length of one segment along Z
-const SEGS_AHEAD = 150;      // how many segments kept alive ahead
+const SEGS_AHEAD = 220;      // how many segments kept alive ahead; extended so the neon road never falls out of view at high speed
 const TRACK_HALF_BASE = 9;   // base half-width of drivable track
 const WALL_SEG_W = 5;        // width subdivisions across wall face
 const WALL_HEIGHT = 46;
@@ -799,7 +799,7 @@ class TerrainMesh{
     // Wireframe fault-line overlay on floor (glowing grid look)
     this.gridGeo = new THREE.PlaneGeometry(1,1, 24, rows-1);
     this.gridGeo.rotateX(-Math.PI/2);
-    this.gridMat = new THREE.MeshBasicMaterial({ color:0xffaa33, wireframe:true, transparent:true, opacity:0.16, fog:true });
+    this.gridMat = new THREE.MeshBasicMaterial({ color:0xffaa33, wireframe:true, transparent:true, opacity:0.24, fog:true });
     this.gridMesh = new THREE.Mesh(this.gridGeo, this.gridMat);
     scene.add(this.gridMesh);
 
@@ -831,6 +831,9 @@ class TerrainMesh{
     const c = new THREE.Color(planet.wallLight);
     c.lerp(new THREE.Color(0xffffff), 0.72);
     this.floorMat.color.copy(c);
+    this.floorMat.emissive.setHex(planet.wallLight);
+    this.floorMat.emissiveIntensity = 0.055;
+    this.gridMat.opacity = 0.24;
   }
 
   update(shipZ){
@@ -902,7 +905,7 @@ class TerrainMesh{
 }
 
 /* ---------------------------------------------------------------------
-   6. GATES (boost rings) + SPEED-LINE PARTICLES + COLLAPSING RIFT
+   6. GATES (boost rings) + SPEED-LINE PARTICLES + BOOST WAVES
 --------------------------------------------------------------------- */
 function makeGateMesh(color){
   const group = new THREE.Group();
@@ -1033,6 +1036,35 @@ class ObstacleManager{
     this.nextSpawnIndex = 26;
   }
 }
+
+
+class BoostWaveManager{
+  constructor(){ this.active = []; }
+  spawn(x, y, z, color){
+    const geo = new THREE.RingGeometry(0.7, 0.82, 64);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0.72, side:THREE.DoubleSide, depthWrite:false, fog:true });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = -Math.PI/2;
+    mesh.position.set(x, y+0.09, z);
+    scene.add(mesh);
+    this.active.push({ mesh, age:0, life:0.9 });
+  }
+  update(dt){
+    for(let i=this.active.length-1;i>=0;i--){
+      const w = this.active[i];
+      w.age += dt;
+      const t = w.age / w.life;
+      w.mesh.scale.setScalar(1 + t*18);
+      w.mesh.material.opacity = Math.max(0, 0.72*(1-t));
+      if(t>=1){ scene.remove(w.mesh); w.mesh.geometry.dispose(); w.mesh.material.dispose(); this.active.splice(i,1); }
+    }
+  }
+  reset(){
+    for(const w of this.active){ scene.remove(w.mesh); w.mesh.geometry.dispose(); w.mesh.material.dispose(); }
+    this.active = [];
+  }
+}
+let boostWaves = new BoostWaveManager();
 
 /* Speed-line particles */
 class SpeedLines{
@@ -1320,10 +1352,66 @@ function pollTouch(){
   return { steer, climb };
 }
 
+
+/* ---------------------------------------------------------------------
+   9B. AUDIO — synth engine, impact, boost, and UI sounds (no cartoon bleeps)
+--------------------------------------------------------------------- */
+let audioCtx = null;
+let masterGain = null;
+let engineOsc = null;
+let engineGain = null;
+
+function ensureAudio(){
+  if(audioCtx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if(!AC) return;
+  audioCtx = new AC();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.18;
+  masterGain.connect(audioCtx.destination);
+
+  engineOsc = audioCtx.createOscillator();
+  engineOsc.type = 'sawtooth';
+  engineGain = audioCtx.createGain();
+  engineGain.gain.value = 0;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 260;
+  engineOsc.connect(filter);
+  filter.connect(engineGain);
+  engineGain.connect(masterGain);
+  engineOsc.start();
+}
+function resumeAudio(){ ensureAudio(); if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); }
+function setEngineSound(speedFactor){
+  if(!audioCtx || !engineOsc) return;
+  const t = audioCtx.currentTime;
+  engineOsc.frequency.setTargetAtTime(52 + speedFactor*74 + (boostFx>0?26:0), t, 0.06);
+  engineGain.gain.setTargetAtTime(running && !paused ? 0.045 + speedFactor*0.06 : 0, t, 0.08);
+}
+function playTone(freq, dur, type='sine', gain=0.12, glideTo=null){
+  if(!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  if(glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t+dur);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(gain, t+0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  osc.connect(g); g.connect(masterGain);
+  osc.start(t); osc.stop(t+dur+0.03);
+}
+function playBoostSound(){ resumeAudio(); playTone(180,0.28,'triangle',0.10,720); playTone(92,0.35,'sawtooth',0.06,160); }
+function playImpactSound(){ resumeAudio(); playTone(110,0.22,'sawtooth',0.16,42); playTone(58,0.18,'square',0.08,38); }
+function playCrashSound(){ resumeAudio(); playTone(150,0.65,'sawtooth',0.18,28); }
+function playUiSound(){ resumeAudio(); playTone(420,0.08,'triangle',0.06,620); }
+
 /* ---------------------------------------------------------------------
    10. GAME STATE MACHINE
 --------------------------------------------------------------------- */
-let track, terrain, gateManager, obstacleManager, speedLines, rift, ship;
+let track, terrain, gateManager, obstacleManager, speedLines, ship;
 let currentPlanet = PLANETS[0];
 let isEndless = false;
 let running = false;
@@ -1340,12 +1428,6 @@ let camShakeT = 0;
 let topMultiplier = 1.0;
 let elapsedClock = new THREE.Clock(false);
 
-// Grace period (seconds) at the start of every run during which the
-// collapsing rift cannot close in or kill the ship. Prevents the rift's
-// initial catch-up speed from ever outrunning a ship that hasn't built up
-// speed yet — this was the cause of near-instant deaths at run start.
-let riftGraceTimer = 0;
-const RIFT_GRACE_SECONDS = 3.0;
 
 const CAM_BASE_FOV = 72;
 
@@ -1365,21 +1447,17 @@ function startRun(planet, endless){
   topMultiplier = 1.0;
   gameOver = false;
   paused = false;
-  riftGraceTimer = RIFT_GRACE_SECONDS;
-
   track = new Track(planet, Math.random()*1000);
   if(terrain){
     scene.remove(terrain.floorMesh, terrain.gridMesh, terrain.wallMeshL, terrain.wallMeshR, terrain.wallGlowMeshL, terrain.wallGlowMeshR);
   }
   terrain = new TerrainMesh(track);
+  boostWaves.reset();
   if(gateManager) gateManager.reset();
   gateManager = new GateManager(track, planet);
   if(obstacleManager) obstacleManager.reset();
   obstacleManager = new ObstacleManager(track, planet);
   if(!speedLines) speedLines = new SpeedLines();
-  if(!rift) rift = new Rift();
-  rift.distanceBehind = 90; // safe starting gap — see Rift class comment
-
   if(!ship) ship = new Ship();
   ship.reset(planet);
 
@@ -1517,7 +1595,12 @@ function update(dt){
   ship.roll += (steer*0.5 - ship.roll) * Math.min(1, dt*6);
 
   // --- vertical (climb/dive over terrain undulation)
-  const climbForce = climbInput * 10;
+  // Vertical movement: keyboard/touch can climb, keyboard down can dive, and
+  // releasing climb gently brings the ship back down instead of leaving it stuck high.
+  const cruiseHeight = 3.6;
+  let verticalIntent = climbInput;
+  if(verticalIntent === 0 && ship.height > cruiseHeight + 0.25) verticalIntent = -0.55;
+  const climbForce = verticalIntent * 10;
   ship.vertVel += (climbForce - ship.vertVel*0.6) * dt*4;
   ship.height += ship.vertVel*dt;
   ship.height = THREE.MathUtils.clamp(ship.height, 1.6, 12);
@@ -1605,6 +1688,8 @@ function update(dt){
         showPopup(gateStreak>1 ? 'BOOST ×'+gateStreak : 'GATE BOOST', currentPlanet.accentCss);
         lightDiamonds(Math.min(3, gateStreak%3===0?3:gateStreak%3));
         camShakeT = Math.max(camShakeT, 0.12);
+        boostWaves.spawn(ship.pos.x, floorY, ship.pos.z-1.5, currentPlanet.boltColor);
+        playBoostSound();
       } else if(g.z > ship.pos.z + 0.5){
         // missed
         g.passed = true;
@@ -1632,22 +1717,7 @@ function update(dt){
     }
   }
 
-  // Collapsing rift: held back entirely during the opening grace window so a
-  // ship that hasn't ramped up speed yet can never be caught immediately.
-  // After grace expires, catch-up speed scales with how much *faster than
-  // base cruising speed* the ship is going (boost/multiplier), plus a small
-  // difficulty-driven creep — rather than a flat fraction of total speed,
-  // which used to close the gap in ~1 second from the start of every run.
-  if(riftGraceTimer>0) riftGraceTimer -= dt;
-  const riftSpeed = riftGraceTimer>0
-    ? 0
-    : Math.max(0, ship.forwardSpeed - ship.baseSpeed) * 0.5 + Math.min(14, distProgress*1.2);
-  rift.update(dt, riftSpeed);
-  if(riftGraceTimer<=0 && rift.distanceBehind <= 7.2){
-    applyDamage(28, 'RIFT BURN');
-    rift.distanceBehind = 26;
-    if(!ship.alive) return;
-  }
+  // No distance-based rift kill: crashes now come only from accumulated damage.
 
   // level completion check
   if(!isEndless && distanceM >= currentPlanet.lengthKm*1000){
@@ -1671,6 +1741,8 @@ function update(dt){
   terrain.update(ship.pos.z);
   const speedFactor = ship.forwardSpeed / (ship.maxSpeed*currentPlanet.speedMul);
   speedLines.update(dt, speedFactor);
+  boostWaves.update(dt);
+  setEngineSound(speedFactor);
   if(camShakeT>0) camShakeT -= dt;
   boltTimer -= dt;
   if(boltTimer<=0){
@@ -1692,6 +1764,7 @@ function flashWarn(){
 }
 
 function applyDamage(amount, label){
+  playImpactSound();
   ship.health = Math.max(0, ship.health - amount);
   camShakeT = Math.max(camShakeT, 0.35);
   flashWarn();
@@ -1705,6 +1778,7 @@ function applyDamage(amount, label){
 }
 
 function triggerCrash(){
+  playCrashSound();
   running = false;
   ship.alive = false;
   camShakeT = 0.9;
@@ -1848,8 +1922,8 @@ document.getElementById('btnQuitPause').addEventListener('click', ()=>{
 
 function tappable(el, fn){
   let fired = false;
-  el.addEventListener('touchend', e=>{ fired = true; e.preventDefault(); fn(e); setTimeout(()=>fired=false, 400); }, {passive:false});
-  el.addEventListener('click', e=>{ if(fired) return; fn(e); });
+  el.addEventListener('touchend', e=>{ fired = true; e.preventDefault(); playUiSound(); fn(e); setTimeout(()=>fired=false, 400); }, {passive:false});
+  el.addEventListener('click', e=>{ if(fired) return; playUiSound(); fn(e); });
 }
 
 function togglePause(){ setPaused(!paused); }
